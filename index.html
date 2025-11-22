@@ -1,0 +1,355 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Play, RotateCcw, Trophy, Heart, Apple, Cherry, Banana, Bug, ArrowLeft, ArrowRight } from 'lucide-react';
+
+const Game = () => {
+  // State Permainan
+  const [gameState, setGameState] = useState('start'); // start, playing, gameover
+  const [score, setScore] = useState(0);
+  const [highScore, setHighScore] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(60); // Durasi permainan 60 detik
+  const [items, setItems] = useState([]); // Array untuk buah/musuh yang jatuh
+  const [basketPos, setBasketPos] = useState(50); // Posisi keranjang (0-100%)
+  const [lives, setLives] = useState(3); // Nyawa pemain
+  const [level, setLevel] = useState(1); // Tingkat kesulitan
+
+  // Referensi untuk loop game
+  const gameLoopRef = useRef();
+  const spawnTimerRef = useRef();
+  
+  // Area permainan
+  const GAME_WIDTH_PERCENT = 100;
+  const BASKET_WIDTH_PERCENT = 20; // Lebar keranjang relatif terhadap layar
+  
+  // Load Highscore dari local storage saat pertama kali buka
+  useEffect(() => {
+    const savedScore = localStorage.getItem('panenBuahHighScore');
+    if (savedScore) setHighScore(parseInt(savedScore));
+  }, []);
+
+  // Mengontrol pergerakan keranjang
+  const moveBasket = (direction) => {
+    setBasketPos((prev) => {
+      let newPos = prev + direction * 5;
+      if (newPos < 0) return 0;
+      if (newPos > 100 - BASKET_WIDTH_PERCENT) return 100 - BASKET_WIDTH_PERCENT;
+      return newPos;
+    });
+  };
+
+  // Handle Keyboard
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (gameState !== 'playing') return;
+      if (e.key === 'ArrowLeft') moveBasket(-2);
+      if (e.key === 'ArrowRight') moveBasket(2);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [gameState]);
+
+  // Logika Memulai Game
+  const startGame = () => {
+    setGameState('playing');
+    setScore(0);
+    setTimeLeft(60);
+    setItems([]);
+    setLives(3);
+    setLevel(1);
+    setBasketPos(50 - (BASKET_WIDTH_PERCENT / 2));
+  };
+
+  // Logika Spawn Item (Buah/Kumbang)
+  const spawnItem = useCallback(() => {
+    const id = Date.now();
+    const typeRoll = Math.random();
+    let type = 'apple';
+    let points = 10;
+    let speed = 0.8 + (level * 0.1); // Kecepatan bertambah seiring level
+
+    // Penentuan jenis item
+    if (typeRoll > 0.9) {
+      type = 'bug'; // 10% kemungkinan muncul kumbang
+    } else if (typeRoll > 0.7) {
+      type = 'banana'; // 20% pisang
+      points = 20;
+      speed *= 1.2;
+    } else if (typeRoll > 0.5) {
+      type = 'cherry'; // 20% ceri
+      points = 15;
+    }
+
+    const newItem = {
+      id,
+      x: Math.random() * (100 - 10), // Posisi random horizontal
+      y: -10, // Mulai dari atas layar
+      type,
+      points,
+      speed
+    };
+
+    setItems(prev => [...prev, newItem]);
+  }, [level]);
+
+  // Game Loop Utama
+  useEffect(() => {
+    if (gameState !== 'playing') return;
+
+    // Interval Spawn Item
+    spawnTimerRef.current = setInterval(spawnItem, 1000 - (level * 50)); // Spawn makin cepat tiap level
+
+    // Interval Timer Game
+    const timerInterval = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          endGame();
+          return 0;
+        }
+        return prev - 1;
+      });
+      
+      // Naikkan level setiap 15 detik
+      if (timeLeft % 15 === 0 && timeLeft < 60) {
+         setLevel(prev => Math.min(prev + 1, 5));
+      }
+    }, 1000);
+
+    // Loop Animasi Jatuh & Deteksi Tabrakan
+    const updateGame = () => {
+      setItems((prevItems) => {
+        return prevItems
+          .map((item) => ({ ...item, y: item.y + item.speed }))
+          .filter((item) => {
+            // Hapus jika sudah lewat bawah layar
+            if (item.y > 100) return false;
+
+            // Deteksi Tabrakan dengan Keranjang
+            // Keranjang berada di Y: 85% sampai 95%
+            const isAtBasketHeight = item.y > 80 && item.y < 95;
+            const isAtBasketWidth = item.x + 5 > basketPos && item.x < basketPos + BASKET_WIDTH_PERCENT;
+
+            if (isAtBasketHeight && isAtBasketWidth) {
+              handleCatch(item);
+              return false; // Hapus item dari layar setelah tertangkap
+            }
+            return true;
+          });
+      });
+
+      gameLoopRef.current = requestAnimationFrame(updateGame);
+    };
+
+    gameLoopRef.current = requestAnimationFrame(updateGame);
+
+    return () => {
+      clearInterval(spawnTimerRef.current);
+      clearInterval(timerInterval);
+      cancelAnimationFrame(gameLoopRef.current);
+    };
+  }, [gameState, basketPos, level, timeLeft, spawnItem]);
+
+  const handleCatch = (item) => {
+    if (item.type === 'bug') {
+      setLives((prev) => {
+        const newLives = prev - 1;
+        if (newLives <= 0) endGame();
+        return newLives;
+      });
+      // Efek getar visual (simple)
+      const gameArea = document.getElementById('game-area');
+      if(gameArea) {
+          gameArea.style.backgroundColor = '#fecaca';
+          setTimeout(() => gameArea.style.backgroundColor = '#eff6ff', 100);
+      }
+    } else {
+      setScore((prev) => prev + item.points);
+    }
+  };
+
+  const endGame = () => {
+    setGameState('gameover');
+    if (score > highScore) {
+      setHighScore(score);
+      localStorage.setItem('panenBuahHighScore', score);
+    }
+  };
+
+  // Render Icon berdasarkan tipe
+  const renderIcon = (type) => {
+    switch (type) {
+      case 'apple': return <Apple className="w-8 h-8 text-red-500 fill-current drop-shadow-sm" />;
+      case 'banana': return <Banana className="w-8 h-8 text-yellow-400 fill-current drop-shadow-sm" />;
+      case 'cherry': return <Cherry className="w-8 h-8 text-pink-500 fill-current drop-shadow-sm" />;
+      case 'bug': return <Bug className="w-8 h-8 text-gray-800 fill-current drop-shadow-sm" />;
+      default: return <Apple className="w-8 h-8 text-red-500" />;
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-b from-blue-300 to-green-200 font-sans select-none p-4 touch-none">
+      
+      {/* --- LAYAR UTAMA (JUDUL) --- */}
+      <div className="max-w-md w-full bg-white/90 rounded-3xl shadow-2xl overflow-hidden border-4 border-white backdrop-blur-sm relative h-[600px]">
+        
+        {/* Header Score & Info */}
+        <div className="absolute top-0 left-0 w-full p-4 flex justify-between items-start z-20 pointer-events-none">
+            <div className="bg-yellow-100 px-3 py-1 rounded-full border-2 border-yellow-400 shadow-sm flex items-center gap-2">
+                <Trophy className="w-4 h-4 text-yellow-600" />
+                <span className="font-bold text-yellow-700 text-sm">Best: {highScore}</span>
+            </div>
+            {gameState === 'playing' && (
+                <div className="flex flex-col items-end gap-2">
+                    <div className="bg-white px-3 py-1 rounded-full border-2 border-blue-200 shadow-sm">
+                        <span className="font-bold text-2xl text-blue-600">{score}</span>
+                    </div>
+                    <div className="flex gap-1">
+                        {[...Array(3)].map((_, i) => (
+                            <Heart key={i} className={`w-5 h-5 ${i < lives ? 'text-red-500 fill-current' : 'text-gray-300'}`} />
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+
+        {/* --- LAYAR START --- */}
+        {gameState === 'start' && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center z-30 bg-white/50 p-6 text-center animate-fade-in">
+            <div className="mb-6 transform hover:scale-110 transition-transform duration-300">
+                <Apple className="w-24 h-24 text-red-500 fill-current drop-shadow-lg inline-block" />
+                <Banana className="w-20 h-20 text-yellow-400 fill-current drop-shadow-lg inline-block -ml-4" />
+            </div>
+            <h1 className="text-4xl font-black text-green-600 mb-2 drop-shadow-md tracking-wide">PANEN BUAH</h1>
+            <p className="text-green-700 mb-8 font-medium text-lg">Tangkap buahnya, hindari kumbang!</p>
+            
+            <button 
+              onClick={startGame}
+              className="group relative bg-green-500 hover:bg-green-600 text-white font-bold py-4 px-10 rounded-full text-xl shadow-lg transform active:scale-95 transition-all"
+            >
+              <span className="flex items-center gap-2">
+                <Play className="w-6 h-6 fill-current" /> MAIN SEKARANG
+              </span>
+              <div className="absolute inset-0 rounded-full border-4 border-white opacity-30 group-hover:animate-ping"></div>
+            </button>
+          </div>
+        )}
+
+        {/* --- AREA PERMAINAN --- */}
+        <div 
+            id="game-area"
+            className="relative w-full h-full bg-blue-50 overflow-hidden transition-colors duration-200"
+        >
+            {/* Latar Belakang Awan & Rumput */}
+            <div className="absolute top-10 left-10 text-blue-100"><Cloud size="lg" /></div>
+            <div className="absolute top-20 right-20 text-blue-100"><Cloud size="sm" /></div>
+            <div className="absolute bottom-0 w-full h-24 bg-green-400 rounded-t-[50px] z-0 border-t-4 border-green-500"></div>
+            
+            {gameState === 'playing' && (
+                <>
+                    {/* Timer Bar */}
+                    <div className="absolute top-0 left-0 h-2 bg-yellow-400 z-10 transition-all duration-1000 ease-linear" style={{ width: `${(timeLeft / 60) * 100}%` }}></div>
+
+                    {/* Item Jatuh */}
+                    {items.map((item) => (
+                        <div
+                            key={item.id}
+                            className="absolute transition-none z-10"
+                            style={{ 
+                                left: `${item.x}%`, 
+                                top: `${item.y}%`,
+                            }}
+                        >
+                            {renderIcon(item.type)}
+                        </div>
+                    ))}
+
+                    {/* Keranjang Pemain */}
+                    <div 
+                        className="absolute bottom-8 z-20 transition-all duration-75 ease-out"
+                        style={{ 
+                            left: `${basketPos}%`, 
+                            width: `${BASKET_WIDTH_PERCENT}%` 
+                        }}
+                    >
+                       <div className="relative flex justify-center">
+                            {/* Visual Keranjang */}
+                            <div className="w-full h-12 bg-amber-700 rounded-b-2xl rounded-t-md relative border-b-4 border-amber-900 shadow-lg overflow-hidden">
+                                <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNCIgaGVpZ2h0PSI0IiB2aWV3Qm94PSIwIDAgNCA0IiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxyZWN0IHdpZHRoPSI0IiBoZWlnaHQ9IjQiIGZpbGw9InRyYW5zcGFyZW50IiAvPjxwYXRoIGQ9Ik0wIDBoMnYySDB6IiBmaWxsPSJyZ2JhKDI1NSwgMjU1LDI1NSwgMC4xKSIgLz48L3N2Zz4=')] opacity-20"></div>
+                                <div className="absolute top-1 w-full h-1 bg-amber-800/30"></div>
+                            </div>
+                            {/* Pegangan Keranjang */}
+                            <div className="absolute -top-6 w-[80%] h-8 border-4 border-amber-800 rounded-t-full border-b-0"></div>
+                       </div>
+                    </div>
+                </>
+            )}
+        </div>
+
+        {/* --- LAYAR GAME OVER --- */}
+        {gameState === 'gameover' && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center z-40 bg-black/60 backdrop-blur-sm p-6 text-center animate-fade-in-up">
+            <div className="bg-white p-8 rounded-3xl shadow-2xl transform scale-100 border-4 border-yellow-400">
+                <h2 className="text-3xl font-black text-gray-800 mb-2">PERMAINAN SELESAI!</h2>
+                <p className="text-gray-500 mb-6">Kamu hebat!</p>
+                
+                <div className="bg-blue-50 p-4 rounded-xl mb-6 border-2 border-blue-100">
+                    <p className="text-sm text-gray-500 uppercase tracking-wider font-bold">Skor Kamu</p>
+                    <p className="text-5xl font-black text-blue-600">{score}</p>
+                </div>
+
+                <button 
+                  onClick={startGame}
+                  className="w-full bg-yellow-400 hover:bg-yellow-500 text-yellow-900 font-bold py-3 px-6 rounded-xl text-lg shadow-md transition-colors flex items-center justify-center gap-2"
+                >
+                  <RotateCcw className="w-5 h-5" /> MAIN LAGI
+                </button>
+            </div>
+          </div>
+        )}
+
+        {/* --- KONTROL MOBILE --- */}
+        {gameState === 'playing' && (
+            <div className="absolute bottom-0 w-full h-full z-30 flex">
+                {/* Area sentuh kiri invisible */}
+                <div 
+                    className="w-1/2 h-full active:bg-white/10 transition-colors flex items-end justify-start p-6"
+                    onTouchStart={() => moveBasket(-4)}
+                    onClick={() => moveBasket(-4)}
+                >
+                     <div className="bg-white/30 p-4 rounded-full backdrop-blur-md border-2 border-white/50 md:hidden mb-12">
+                        <ArrowLeft className="w-8 h-8 text-white" />
+                     </div>
+                </div>
+                {/* Area sentuh kanan invisible */}
+                <div 
+                    className="w-1/2 h-full active:bg-white/10 transition-colors flex items-end justify-end p-6"
+                    onTouchStart={() => moveBasket(4)}
+                    onClick={() => moveBasket(4)}
+                >
+                    <div className="bg-white/30 p-4 rounded-full backdrop-blur-md border-2 border-white/50 md:hidden mb-12">
+                        <ArrowRight className="w-8 h-8 text-white" />
+                     </div>
+                </div>
+            </div>
+        )}
+
+      </div>
+      
+      <div className="mt-4 text-blue-800/60 text-sm font-medium text-center">
+        Gunakan Panah Kiri/Kanan atau Ketuk Layar
+      </div>
+    </div>
+  );
+};
+
+// Komponen Dekorasi Awan Sederhana
+const Cloud = ({ size }) => {
+    const sizeClass = size === 'lg' ? 'w-24 h-12' : 'w-16 h-8';
+    return (
+        <div className={`${sizeClass} bg-current rounded-full opacity-60 relative`}>
+            <div className="absolute -top-1/2 left-2 w-[50%] h-[150%] bg-current rounded-full"></div>
+            <div className="absolute -top-1/3 right-2 w-[40%] h-[120%] bg-current rounded-full"></div>
+        </div>
+    );
+}
+
+export default Game;
+
